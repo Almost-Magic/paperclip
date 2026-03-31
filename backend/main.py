@@ -1,7 +1,7 @@
 """Paperclip — AMTL Fleet Command Centre (FastAPI main app)."""
 
 import logging
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from sqlalchemy import text
@@ -16,6 +16,7 @@ from backend.models.schemas import (
 )
 from backend.services.routing_engine import route_command
 from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
+from backend.services.websocket import manager
 import uuid
 from datetime import datetime, timedelta
 
@@ -166,6 +167,15 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_sessio
         await db.commit()
 
         logger.info(f"Task {task_id} created: {payload.instruction}")
+
+        # Broadcast to all connected WebSocket clients
+        await manager.broadcast_task_created(
+            task_id=task_id,
+            instruction=payload.instruction,
+            assigned_to=payload.assigned_to,
+            assigned_to_type=payload.assigned_to_type,
+        )
+
         return TaskOut(
             id=task_id,
             assigned_to=payload.assigned_to,
@@ -346,6 +356,15 @@ async def handle_command(
         await db.commit()
 
         logger.info(f"Command routed: '{payload.instruction}' → {agent_id}")
+
+        # Broadcast task creation to all connected WebSocket clients
+        await manager.broadcast_task_created(
+            task_id=task_id,
+            instruction=payload.instruction,
+            assigned_to=agent_id,
+            assigned_to_type=agent_type,
+        )
+
         return CommandResponse(
             instruction=payload.instruction,
             routed_to=agent_id,
@@ -357,6 +376,53 @@ async def handle_command(
         await db.rollback()
         logger.error(f"Failed to handle command: {e}")
         raise HTTPException(status_code=500, detail="Failed to handle command")
+
+
+# WebSocket endpoint for real-time fleet updates
+@app.websocket("/paperclip/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time terminal/hand/task updates.
+
+    Clients connect and receive broadcasts whenever:
+    - A terminal or hand changes status
+    - A task is created, updated, or completed
+    - Fleet health changes
+    """
+    await manager.connect(websocket)
+
+    # Send initial fleet health on connect
+    try:
+        async with SessionLocal() as db:
+            t_result = await db.execute(text("SELECT COUNT(*) FROM terminals WHERE status = 'idle' OR status = 'busy'"))
+            h_result = await db.execute(text("SELECT COUNT(*) FROM hands WHERE status = 'idle' OR status = 'busy'"))
+            terminals_online = t_result.scalar() or 0
+            hands_online = h_result.scalar() or 0
+
+            await websocket.send_json({
+                "type": "connected",
+                "message": "Connected to Paperclip real-time updates",
+                "terminals_online": terminals_online,
+                "hands_online": hands_online,
+            })
+    except Exception as e:
+        logger.error(f"Failed to send initial state: {e}")
+
+    try:
+        # Keep connection open and wait for incoming messages
+        # (In this implementation, we only broadcast, but clients can send heartbeat/ping)
+        while True:
+            data = await websocket.receive_text()
+
+            # Echo ping/pong for connection health check
+            if data == "ping":
+                await websocket.send_json({"type": "pong", "timestamp": datetime.utcnow().isoformat()})
+
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket)
+        logger.info("WebSocket client disconnected normally")
+    except Exception as e:
+        await manager.disconnect(websocket)
+        logger.error(f"WebSocket error: {e}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 
 // Colors constant
 const colors = {
@@ -13,7 +13,96 @@ const colors = {
   error: '#E05858',
 }
 
-// Hook: usePolling
+// Hook: useWebSocket — Real-time updates via WebSocket
+function useWebSocket(endpoint) {
+  const [data, setData] = useState(null)
+  const [connected, setConnected] = useState(false)
+  const [error, setError] = useState(null)
+  const wsRef = useRef(null)
+  const messageHandlersRef = useRef([])
+
+  useEffect(() => {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${wsProtocol}//${window.location.host}${endpoint}`
+
+    const connect = () => {
+      try {
+        const ws = new WebSocket(wsUrl)
+
+        ws.onopen = () => {
+          console.log(`[WebSocket] Connected to ${endpoint}`)
+          setConnected(true)
+          setError(null)
+        }
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data)
+            console.log(`[WebSocket] Received:`, message)
+
+            // Call all registered message handlers
+            messageHandlersRef.current.forEach(handler => handler(message))
+
+            // Store the message for reference
+            setData(prev => ({
+              ...prev,
+              lastMessage: message,
+              timestamp: new Date().toISOString(),
+            }))
+          } catch (e) {
+            console.error('[WebSocket] Failed to parse message:', e)
+          }
+        }
+
+        ws.onerror = (event) => {
+          console.error('[WebSocket] Error:', event)
+          setError('WebSocket error')
+          setConnected(false)
+        }
+
+        ws.onclose = () => {
+          console.log(`[WebSocket] Disconnected from ${endpoint}`)
+          setConnected(false)
+          // Attempt to reconnect after 3 seconds
+          setTimeout(connect, 3000)
+        }
+
+        wsRef.current = ws
+      } catch (e) {
+        console.error('[WebSocket] Failed to connect:', e)
+        setError(e.message)
+        setTimeout(connect, 3000)
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+    }
+  }, [endpoint])
+
+  const subscribe = useCallback((handler) => {
+    messageHandlersRef.current.push(handler)
+    return () => {
+      messageHandlersRef.current = messageHandlersRef.current.filter(h => h !== handler)
+    }
+  }, [])
+
+  const send = useCallback((message) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(message))
+    } else {
+      console.warn('[WebSocket] Connection not ready')
+    }
+  }, [])
+
+  return { connected, error, subscribe, send, data }
+}
+
+// Hook: usePolling — Fallback for non-WebSocket data
 function usePolling(url, interval) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -99,11 +188,41 @@ function TaskCard({ task }) {
 }
 
 // Screen 1: Command Centre
-function CommandCentre({ onTaskCreated }) {
+function CommandCentre({ onTaskCreated, wsConnected }) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
-  const { data: tasks } = usePolling('/paperclip/api/tasks', 5000)
+  const [tasks, setTasks] = useState([])
+  const { subscribe } = useWebSocket('/paperclip/ws')
+
+  // Fetch initial tasks
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        const r = await fetch('/paperclip/api/tasks?limit=50')
+        if (r.ok) {
+          const result = await r.json()
+          setTasks(result.items || [])
+        }
+      } catch (e) {
+        console.error('Failed to fetch tasks:', e)
+      }
+    }
+    fetchTasks()
+  }, [])
+
+  // Subscribe to task creation events
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type === 'task_created' || msg.type === 'task_update') {
+        // Refetch tasks when new one arrives
+        fetch('/paperclip/api/tasks?limit=50')
+          .then(r => r.json())
+          .then(result => setTasks(result.items || []))
+          .catch(e => console.error('Failed to refresh tasks:', e))
+      }
+    })
+  }, [subscribe])
 
   const handleCommand = async (e) => {
     e.preventDefault()
@@ -252,9 +371,41 @@ function FleetDashboard() {
 
 // Screen 3: Terminals
 function TerminalsScreen() {
-  const { data: terminals, loading } = usePolling('/paperclip/api/terminals', 3000)
+  const [terminals, setTerminals] = useState([])
+  const [loading, setLoading] = useState(true)
+  const { subscribe } = useWebSocket('/paperclip/ws')
 
-  if (loading && !terminals) return <div>Loading terminals...</div>
+  // Fetch initial terminals
+  useEffect(() => {
+    const fetchTerminals = async () => {
+      setLoading(true)
+      try {
+        const r = await fetch('/paperclip/api/terminals')
+        if (r.ok) {
+          setTerminals(await r.json())
+        }
+      } catch (e) {
+        console.error('Failed to fetch terminals:', e)
+      }
+      setLoading(false)
+    }
+    fetchTerminals()
+  }, [])
+
+  // Subscribe to terminal status updates
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type === 'terminal_update') {
+        setTerminals(prev => prev.map(t =>
+          t.id === msg.terminal_id
+            ? { ...t, status: msg.status, current_task: msg.current_task }
+            : t
+        ))
+      }
+    })
+  }, [subscribe])
+
+  if (loading && !terminals.length) return <div>Loading terminals...</div>
 
   return (
     <div>
@@ -262,7 +413,7 @@ function TerminalsScreen() {
         Terminals (7)
       </h1>
 
-      {terminals && terminals.map(t => (
+      {terminals.map(t => (
         <div key={t.id} style={{
           backgroundColor: colors.card,
           border: `1px solid ${colors.border}`,
@@ -291,9 +442,41 @@ function TerminalsScreen() {
 
 // Screen 4: Hands
 function HandsScreen() {
-  const { data: hands, loading } = usePolling('/paperclip/api/hands', 3000)
+  const [hands, setHands] = useState([])
+  const [loading, setLoading] = useState(true)
+  const { subscribe } = useWebSocket('/paperclip/ws')
 
-  if (loading && !hands) return <div>Loading hands...</div>
+  // Fetch initial hands
+  useEffect(() => {
+    const fetchHands = async () => {
+      setLoading(true)
+      try {
+        const r = await fetch('/paperclip/api/hands')
+        if (r.ok) {
+          setHands(await r.json())
+        }
+      } catch (e) {
+        console.error('Failed to fetch hands:', e)
+      }
+      setLoading(false)
+    }
+    fetchHands()
+  }, [])
+
+  // Subscribe to hand status updates
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type === 'hand_update') {
+        setHands(prev => prev.map(h =>
+          h.id === msg.hand_id
+            ? { ...h, status: msg.status, current_task: msg.current_task }
+            : h
+        ))
+      }
+    })
+  }, [subscribe])
+
+  if (loading && !hands.length) return <div>Loading hands...</div>
 
   return (
     <div>
@@ -301,7 +484,7 @@ function HandsScreen() {
         Hands (11)
       </h1>
 
-      {hands && hands.map(h => (
+      {hands.map(h => (
         <div key={h.id} style={{
           backgroundColor: colors.card,
           border: `1px solid ${colors.border}`,
@@ -330,7 +513,47 @@ function HandsScreen() {
 
 // Screen 5: Task History
 function TaskHistory() {
-  const { data: tasks } = usePolling('/paperclip/api/tasks', 5000)
+  const [tasks, setTasks] = useState([])
+  const { subscribe } = useWebSocket('/paperclip/ws')
+
+  // Fetch initial tasks
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        const r = await fetch('/paperclip/api/tasks?limit=100')
+        if (r.ok) {
+          const result = await r.json()
+          setTasks(result.items || [])
+        }
+      } catch (e) {
+        console.error('Failed to fetch tasks:', e)
+      }
+    }
+    fetchTasks()
+  }, [])
+
+  // Subscribe to task updates
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type === 'task_update') {
+        setTasks(prev => prev.map(t =>
+          t.id === msg.task_id
+            ? { ...t, status: msg.status, output: msg.output }
+            : t
+        ))
+      } else if (msg.type === 'task_created') {
+        // New task arrived, add to beginning
+        setTasks(prev => [{
+          id: msg.task_id,
+          instruction: msg.instruction,
+          assigned_to: msg.assigned_to,
+          assigned_to_type: msg.assigned_to_type,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        }, ...prev])
+      }
+    })
+  }, [subscribe])
 
   return (
     <div>
@@ -349,6 +572,7 @@ function TaskHistory() {
 export default function App() {
   const [activeTab, setActiveTab] = useState('command')
   const [taskUpdated, setTaskUpdated] = useState(0)
+  const { connected: wsConnected } = useWebSocket('/paperclip/ws')
 
   const tabs = [
     { id: 'command', label: 'Command Centre', icon: '⚡' },
@@ -372,7 +596,20 @@ export default function App() {
         <h1 style={{ margin: 0, fontSize: '20px', fontFamily: 'Lora', color: colors.accent }}>
           🎯 Paperclip
         </h1>
-        <div style={{ fontSize: '12px', color: colors.muted }}>AMTL Fleet Command Centre</div>
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+          <div style={{ fontSize: '12px', color: colors.muted }}>AMTL Fleet Command Centre</div>
+          <div style={{
+            display: 'inline-block',
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            backgroundColor: wsConnected ? colors.success : colors.error,
+            marginRight: '4px',
+          }} title={wsConnected ? 'WebSocket connected' : 'WebSocket disconnected'} />
+          <span style={{ fontSize: '11px', color: wsConnected ? colors.success : colors.error }}>
+            {wsConnected ? 'Live' : 'Polling'}
+          </span>
+        </div>
       </header>
 
       {/* Tab navigation */}
@@ -407,7 +644,7 @@ export default function App() {
 
       {/* Content */}
       <main style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
-        {activeTab === 'command' && <CommandCentre onTaskCreated={() => setTaskUpdated(t => t + 1)} />}
+        {activeTab === 'command' && <CommandCentre onTaskCreated={() => setTaskUpdated(t => t + 1)} wsConnected={wsConnected} />}
         {activeTab === 'fleet' && <FleetDashboard />}
         {activeTab === 'terminals' && <TerminalsScreen />}
         {activeTab === 'hands' && <HandsScreen />}

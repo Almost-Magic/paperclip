@@ -288,5 +288,87 @@ class TestIntegration:
             assert tid in existing_ids
 
 
+class TestWebSocket:
+    """WebSocket real-time updates tests."""
+
+    def test_websocket_endpoint_accepts_connection(self, client):
+        """WebSocket endpoint accepts new connections."""
+        with client.websocket_connect("/paperclip/ws") as websocket:
+            # Should receive initial connection message
+            data = websocket.receive_json()
+            assert data["type"] == "connected"
+            assert "terminals_online" in data
+            assert "hands_online" in data
+
+    def test_websocket_broadcasts_task_created(self, client):
+        """WebSocket broadcasts when task is created."""
+        # Create task (which triggers broadcast)
+        task_payload = {
+            "assigned_to": "T1",
+            "assigned_to_type": "terminal",
+            "instruction": "test broadcast",
+        }
+        task_r = client.post("/paperclip/api/tasks", json=task_payload)
+        task_id = task_r.json()["id"]
+
+        # Connect to WebSocket and create another task
+        with client.websocket_connect("/paperclip/ws") as websocket:
+            # Get initial connection message
+            initial = websocket.receive_json()
+            assert initial["type"] == "connected"
+
+            # Create a task to trigger broadcast
+            new_task = {
+                "assigned_to": "T2",
+                "assigned_to_type": "terminal",
+                "instruction": "websocket test 2",
+            }
+            client.post("/paperclip/api/tasks", json=new_task)
+
+            # Should receive task_created broadcast
+            broadcast = websocket.receive_json(timeout=1)
+            assert broadcast["type"] == "task_created"
+            assert broadcast["instruction"] == "websocket test 2"
+            assert broadcast["assigned_to"] == "T2"
+
+    def test_websocket_receives_ping_pong(self, client):
+        """WebSocket responds to ping with pong."""
+        with client.websocket_connect("/paperclip/ws") as websocket:
+            # Skip initial message
+            websocket.receive_json()
+
+            # Send ping
+            websocket.send_text("ping")
+
+            # Should receive pong
+            response = websocket.receive_json(timeout=1)
+            assert response["type"] == "pong"
+            assert "timestamp" in response
+
+    def test_websocket_multiple_connections(self, client):
+        """Multiple WebSocket connections can coexist."""
+        with client.websocket_connect("/paperclip/ws") as ws1:
+            ws1.receive_json()  # Skip initial
+
+            with client.websocket_connect("/paperclip/ws") as ws2:
+                ws2.receive_json()  # Skip initial
+
+                # Create task
+                task_payload = {
+                    "assigned_to": "T1",
+                    "assigned_to_type": "terminal",
+                    "instruction": "broadcast to multiple",
+                }
+                client.post("/paperclip/api/tasks", json=task_payload)
+
+                # Both should receive broadcast
+                msg1 = ws1.receive_json(timeout=1)
+                msg2 = ws2.receive_json(timeout=1)
+
+                assert msg1["type"] == "task_created"
+                assert msg2["type"] == "task_created"
+                assert msg1["instruction"] == msg2["instruction"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
