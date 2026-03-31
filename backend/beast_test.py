@@ -359,6 +359,108 @@ class TestAdvancedRouting:
             assert r.json()["routed_to"] == expected_agent
 
 
+class TestProductionHardening:
+    """Production hardening and rate limiting tests (F5)."""
+
+    def test_rate_limiting_returns_429_when_exceeded(self, client):
+        """Rate limiting returns 429 Too Many Requests when limit exceeded."""
+        # Make 11 requests (limit is 10 per minute)
+        for i in range(11):
+            r = client.get("/health")
+            if i < 10:
+                assert r.status_code == 200, f"Request {i} should succeed"
+            else:
+                # 11th request should be rate limited
+                assert r.status_code == 429, "11th request should be rate limited"
+                assert "Rate limit exceeded" in r.json()["detail"]
+
+    def test_error_handling_on_task_creation_failure(self, client):
+        """Invalid task payload returns 400 error with message."""
+        # Missing required field
+        payload = {"assigned_to": "T1"}  # Missing instruction and assigned_to_type
+        r = client.post("/paperclip/api/tasks", json=payload)
+        assert r.status_code in [400, 422]  # Pydantic validation error
+
+    def test_unauthorized_access_returns_401(self, client):
+        """Endpoints without auth header return 401 Unauthorized."""
+        # Remove Authorization header by using client without token
+        r = client.get("/paperclip/api/terminals")
+        assert r.status_code == 401
+        assert "authorization" in r.json()["detail"].lower()
+
+
+class TestMonitoringObservability:
+    """Monitoring and observability endpoints tests (F6)."""
+
+    def test_task_metrics_endpoint(self, client):
+        """Metrics endpoint returns task statistics."""
+        # Create some tasks first
+        for i in range(3):
+            client.post("/paperclip/api/tasks", json={
+                "assigned_to": "T1",
+                "assigned_to_type": "terminal",
+                "instruction": f"test task {i}",
+            })
+
+        r = client.get("/paperclip/api/metrics/tasks?hours=24")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total_tasks" in data
+        assert "success_rate" in data
+        assert data["time_period_hours"] == 24
+
+    def test_terminal_metrics_endpoint(self, client):
+        """Terminal metrics endpoint returns status distribution."""
+        r = client.get("/paperclip/api/metrics/terminals")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total" in data
+        assert "idle" in data
+        assert "busy" in data
+        assert "offline" in data
+        assert "availability" in data
+        assert "terminals" in data
+        assert len(data["terminals"]) == 7  # 7 terminals seeded
+
+    def test_hand_metrics_endpoint(self, client):
+        """Hand metrics endpoint returns status distribution."""
+        r = client.get("/paperclip/api/metrics/hands")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total" in data
+        assert "idle" in data
+        assert "busy" in data
+        assert "offline" in data
+        assert "availability" in data
+        assert "hands" in data
+        assert len(data["hands"]) == 11  # 11 hands seeded
+
+    def test_agent_metrics_endpoint(self, client):
+        """Agent-specific metrics endpoint returns execution stats."""
+        r = client.get("/paperclip/api/metrics/agent/T1")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["agent_id"] == "T1"
+        assert "total_tasks" in data
+        assert "completed" in data
+        assert "success_rate" in data
+        assert "avg_execution_seconds" in data
+
+    def test_fleet_health_snapshot(self, client):
+        """Fleet health endpoint returns comprehensive snapshot."""
+        r = client.get("/paperclip/api/metrics/fleet-health")
+        assert r.status_code == 200
+        data = r.json()
+        assert "timestamp" in data
+        assert "overall_health_score" in data
+        assert 0 <= data["overall_health_score"] <= 100
+        assert "tasks" in data
+        assert "terminals" in data
+        assert "hands" in data
+        assert "status" in data
+        assert data["status"] in ["healthy", "degraded", "critical"]
+
+
 class TestWebSocket:
     """WebSocket real-time updates tests."""
 

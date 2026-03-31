@@ -18,8 +18,11 @@ from backend.services.routing_engine import route_command
 from backend.services.advanced_routing import route_command_advanced, save_user_preference, get_routing_frequency, record_routing_decision
 from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
 from backend.services.websocket import manager
+from backend.services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
 import uuid
 from datetime import datetime, timedelta
+from collections import defaultdict
+import time
 
 logger = logging.getLogger("paperclip")
 
@@ -29,6 +32,36 @@ app = FastAPI(
     description="AMTL Fleet Command Centre",
     version="1.0.0",
 )
+
+# Rate limiting (simple in-memory implementation)
+# Production would use Redis for distributed rate limiting
+rate_limit_storage: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_PER_SECOND = 10
+RATE_LIMIT_WINDOW = 60  # seconds
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    """Simple rate limiting middleware (10 requests per minute per IP)."""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Clean old entries
+    current_time = time.time()
+    if client_ip in rate_limit_storage:
+        rate_limit_storage[client_ip] = [t for t in rate_limit_storage[client_ip] if current_time - t < RATE_LIMIT_WINDOW]
+
+    # Check rate limit
+    if len(rate_limit_storage[client_ip]) >= RATE_LIMIT_PER_SECOND:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded (10 requests per minute)"},
+        )
+
+    # Record this request
+    rate_limit_storage[client_ip].append(current_time)
+
+    response = await call_next(request)
+    return response
 
 
 # Lifespan event — initialize DB on startup
@@ -438,6 +471,79 @@ async def get_routing_stats(
     except Exception as e:
         logger.error(f"Failed to get routing stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to get routing stats")
+
+
+# Monitoring & Observability Endpoints (F6)
+@app.get("/paperclip/api/metrics/tasks")
+async def get_task_metrics_endpoint(
+    hours: int = 24,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get task success/failure rates and execution statistics."""
+    try:
+        metrics = await get_task_metrics(db, hours)
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get task metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get task metrics")
+
+
+@app.get("/paperclip/api/metrics/terminals")
+async def get_terminal_metrics_endpoint(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get terminal availability and status distribution."""
+    try:
+        metrics = await get_terminal_metrics(db)
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get terminal metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get terminal metrics")
+
+
+@app.get("/paperclip/api/metrics/hands")
+async def get_hand_metrics_endpoint(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get hand availability and status distribution."""
+    try:
+        metrics = await get_hand_metrics(db)
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get hand metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get hand metrics")
+
+
+@app.get("/paperclip/api/metrics/agent/{agent_id}")
+async def get_agent_metrics(
+    agent_id: str,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get specific agent execution time and success rate."""
+    try:
+        metrics = await get_agent_execution_time(db, agent_id)
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get agent metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get agent metrics")
+
+
+@app.get("/paperclip/api/metrics/fleet-health")
+async def get_fleet_health(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get comprehensive fleet health snapshot (overall score + component breakdown)."""
+    try:
+        health = await get_fleet_health_snapshot(db)
+        return health
+    except Exception as e:
+        logger.error(f"Failed to get fleet health: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get fleet health")
 
 
 # WebSocket endpoint for real-time fleet updates
