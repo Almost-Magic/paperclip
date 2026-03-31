@@ -94,3 +94,26 @@ class HealthResponse(BaseModel):
     database: str
     terminals_online: int
     hands_online: int
+
+
+class LoginRequest(BaseModel):
+    """User login request."""
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class LoginResponse(BaseModel):
+    """User login response."""
+    access_token: str
+    token_type: str = "bearer"
+    username: str
+    role: str
+    expires_in: int
+
+
+class TokenPayload(BaseModel):
+    """JWT token payload."""
+    sub: str  # username
+    role: str
+    permissions: list[str]
+    exp: datetime

@@ -3,17 +3,20 @@
 import logging
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import PORT, HOST, ENV
 from backend.models.database import init_db, seed_terminals_and_hands, get_session, SessionLocal
 from backend.models.schemas import (
-    HealthResponse, TerminalOut, HandOut, TaskCreate, TaskOut, CommandRequest, CommandResponse
+    HealthResponse, TerminalOut, HandOut, TaskCreate, TaskOut, CommandRequest, CommandResponse,
+    LoginRequest, LoginResponse
 )
 from backend.services.routing_engine import route_command
+from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("paperclip")
 
@@ -62,10 +65,60 @@ async def health(db: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=503, detail="Service unavailable")
 
 
+# Authentication dependency
+async def get_current_user(authorization: str = Depends(HTTPBearer(auto_error=False))):
+    """Dependency to validate JWT token from Authorization header."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    token = get_token_from_header(f"Bearer {authorization.credentials}")
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+    try:
+        payload = verify_token(token)
+        return {
+            "username": payload.get("sub"),
+            "role": payload.get("role"),
+            "permissions": payload.get("permissions", []),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+# Login endpoint (no auth required)
+@app.post("/paperclip/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """Authenticate user and return JWT token."""
+    user = authenticate_user(request.username, request.password)
+    if not user:
+        logger.warning(f"Login failed for user: {request.username}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Create token
+    access_token = create_access_token({
+        "sub": user["username"],
+        "role": user["role"],
+        "permissions": user["permissions"],
+    })
+
+    logger.info(f"User logged in: {user['username']} (role={user['role']})")
+
+    return LoginResponse(
+        access_token=access_token,
+        username=user["username"],
+        role=user["role"],
+        expires_in=1440 * 60,  # 24 hours in seconds
+    )
+
+
 # Terminals endpoint
 @app.get("/paperclip/api/terminals", response_model=list[TerminalOut])
-async def list_terminals(db: AsyncSession = Depends(get_session)):
-    """List all 7 terminals with status."""
+async def list_terminals(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """List all 7 terminals with status (requires authentication)."""
     try:
         result = await db.execute(text("SELECT * FROM terminals ORDER BY id"))
         rows = result.mappings().all()
@@ -77,7 +130,10 @@ async def list_terminals(db: AsyncSession = Depends(get_session)):
 
 # Hands endpoint
 @app.get("/paperclip/api/hands", response_model=list[HandOut])
-async def list_hands(db: AsyncSession = Depends(get_session)):
+async def list_hands(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
     """List all 11 hands with status."""
     try:
         result = await db.execute(text("SELECT * FROM hands ORDER BY id"))
@@ -90,7 +146,7 @@ async def list_hands(db: AsyncSession = Depends(get_session)):
 
 # Tasks endpoint — create
 @app.post("/paperclip/api/tasks", response_model=TaskOut, status_code=201)
-async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_session)):
+async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_session), current_user: dict = Depends(get_current_user)):
     """Create a task and assign to terminal/hand."""
     try:
         task_id = f"task_{uuid.uuid4().hex[:8]}"
@@ -125,7 +181,7 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_sessio
 
 # Tasks endpoint — list
 @app.get("/paperclip/api/tasks", response_model=list[TaskOut])
-async def list_tasks(db: AsyncSession = Depends(get_session)):
+async def list_tasks(db: AsyncSession = Depends(get_session), current_user: dict = Depends(get_current_user)):
     """List all tasks with status."""
     try:
         result = await db.execute(text("""
@@ -142,7 +198,7 @@ async def list_tasks(db: AsyncSession = Depends(get_session)):
 
 # Tasks endpoint — get detail
 @app.get("/paperclip/api/tasks/{task_id}", response_model=TaskOut)
-async def get_task(task_id: str, db: AsyncSession = Depends(get_session)):
+async def get_task(task_id: str, db: AsyncSession = Depends(get_session), current_user: dict = Depends(get_current_user)):
     """Get task detail."""
     try:
         result = await db.execute(text("""
