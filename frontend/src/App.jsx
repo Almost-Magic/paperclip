@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { CostDashboard } from './screens/CostDashboard'
+import { AuditLog } from './screens/AuditLog'
 
 // Colors constant
 const colors = {
@@ -580,6 +582,8 @@ export default function App() {
     { id: 'terminals', label: 'Terminals', icon: '🖥️' },
     { id: 'hands', label: 'Hands', icon: '👐' },
     { id: 'history', label: 'Task History', icon: '📋' },
+    { id: 'costs', label: 'Costs', icon: '💰' },
+    { id: 'audit', label: 'Audit Log', icon: '📋' },
   ]
 
   return (
@@ -649,6 +653,8 @@ export default function App() {
         {activeTab === 'terminals' && <TerminalsScreen />}
         {activeTab === 'hands' && <HandsScreen />}
         {activeTab === 'history' && <TaskHistory />}
+        {activeTab === 'costs' && <CostDashboard />}
+        {activeTab === 'audit' && <AuditLog />}
       </main>
     </div>
   )
