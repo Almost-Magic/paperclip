@@ -152,12 +152,47 @@ async def init_db():
             )
         """))
 
-        # Create indexes
+        # Tasks archive table (Phase 3 F4 — archival)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS tasks_archive (
+                id VARCHAR(100) PRIMARY KEY,
+                assigned_to VARCHAR(50) NOT NULL,
+                assigned_to_type VARCHAR(20) NOT NULL,
+                instruction TEXT NOT NULL,
+                status VARCHAR(50) DEFAULT 'complete',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                output TEXT,
+                archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
+        # Cleanup jobs table (Phase 3 F4 — cleanup tracking)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS cleanup_jobs (
+                id SERIAL PRIMARY KEY,
+                job_type VARCHAR(50) NOT NULL,
+                status VARCHAR(50) DEFAULT 'pending',
+                records_processed INTEGER DEFAULT 0,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
+        # Create indexes (Phase 2 + Phase 3 F4)
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to)
         """))
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks(completed_at)
         """))
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_terminals_status ON terminals(status)
@@ -170,6 +205,24 @@ async def init_db():
         """))
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_routing_history_created ON routing_history(created_at)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_cost_ledger_agent_id ON cost_ledger(agent_id)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_cost_ledger_created_at ON cost_ledger(created_at DESC)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_audit_log_username ON audit_log(username)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_archive_archived_at ON tasks_archive(archived_at DESC)
         """))
 
     logger.info("Database tables initialized")

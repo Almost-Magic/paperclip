@@ -21,6 +21,13 @@ from backend.services.websocket import manager
 from backend.services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
 from backend.services.cost_tracking import record_task_cost, get_cost_summary, get_cost_by_agent, get_cost_trend
 from backend.services.audit_logging import log_audit_event, get_audit_log, get_audit_summary
+from backend.services.caching import (
+    cache_terminals_list, get_cached_terminals_list, invalidate_terminals_cache,
+    cache_hands_list, get_cached_hands_list, invalidate_hands_cache,
+    cache_fleet_health, get_cached_fleet_health, invalidate_fleet_health_cache,
+    cache_cost_summary, get_cached_cost_summary, invalidate_cost_cache, get_cache
+)
+from backend.services.cleanup import archive_old_tasks, cleanup_routing_history, cleanup_old_audit_logs, run_full_cleanup, get_cleanup_history, get_archive_stats
 import uuid
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -156,11 +163,20 @@ async def list_terminals(
     db: AsyncSession = Depends(get_session),
     current_user: dict = Depends(get_current_user),
 ):
-    """List all 7 terminals with status (requires authentication)."""
+    """List all 7 terminals with status (requires authentication). Cached for 5 seconds."""
     try:
+        # Check cache first (Phase 3 F4)
+        cached = get_cached_terminals_list()
+        if cached is not None:
+            return cached
+
         result = await db.execute(text("SELECT * FROM terminals ORDER BY id"))
         rows = result.mappings().all()
-        return [dict(row) for row in rows]
+        terminals = [dict(row) for row in rows]
+
+        # Cache for 5 seconds
+        cache_terminals_list(terminals)
+        return terminals
     except Exception as e:
         logger.error(f"Failed to list terminals: {e}")
         raise HTTPException(status_code=500, detail="Failed to list terminals")
@@ -172,11 +188,20 @@ async def list_hands(
     db: AsyncSession = Depends(get_session),
     current_user: dict = Depends(get_current_user),
 ):
-    """List all 11 hands with status."""
+    """List all 11 hands with status. Cached for 5 seconds."""
     try:
+        # Check cache first (Phase 3 F4)
+        cached = get_cached_hands_list()
+        if cached is not None:
+            return cached
+
         result = await db.execute(text("SELECT * FROM hands ORDER BY id"))
         rows = result.mappings().all()
-        return [dict(row) for row in rows]
+        hands = [dict(row) for row in rows]
+
+        # Cache for 5 seconds
+        cache_hands_list(hands)
+        return hands
     except Exception as e:
         logger.error(f"Failed to list hands: {e}")
         raise HTTPException(status_code=500, detail="Failed to list hands")
@@ -549,9 +574,17 @@ async def get_fleet_health(
     db: AsyncSession = Depends(get_session),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get comprehensive fleet health snapshot (overall score + component breakdown)."""
+    """Get comprehensive fleet health snapshot (overall score + component breakdown). Cached for 30 seconds."""
     try:
+        # Check cache first (Phase 3 F4)
+        cached = get_cached_fleet_health()
+        if cached is not None:
+            return cached
+
         health = await get_fleet_health_snapshot(db)
+
+        # Cache for 30 seconds
+        cache_fleet_health(health)
         return health
     except Exception as e:
         logger.error(f"Failed to get fleet health: {e}")
@@ -572,6 +605,8 @@ async def record_cost(
     """Record cost for a task."""
     try:
         result = await record_task_cost(db, task_id, agent_id, model, input_tokens, output_tokens)
+        # Invalidate cost cache when new cost recorded (Phase 3 F4)
+        invalidate_cost_cache()
         return result
     except Exception as e:
         logger.error(f"Failed to record cost: {e}")
@@ -585,9 +620,20 @@ async def get_cost_summary_endpoint(
     db: AsyncSession = Depends(get_session),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get cost summary for period (optionally by agent)."""
+    """Get cost summary for period (optionally by agent). Cached for 60 seconds (24h without agent_id filter)."""
     try:
+        # Cache only 24h global summary (Phase 3 F4)
+        if agent_id is None and hours == 24:
+            cached = get_cached_cost_summary()
+            if cached is not None:
+                return cached
+
         summary = await get_cost_summary(db, agent_id, hours)
+
+        # Cache only if global summary
+        if agent_id is None and hours == 24:
+            cache_cost_summary(summary)
+
         return summary
     except Exception as e:
         logger.error(f"Failed to get cost summary: {e}")
@@ -658,6 +704,126 @@ async def get_audit_summary_endpoint(
     except Exception as e:
         logger.error(f"Failed to get audit summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get audit summary")
+
+
+# Database Cleanup Endpoints (Phase 3 F4)
+@app.post("/paperclip/api/cleanup/run")
+async def run_cleanup(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Run all database cleanup jobs (archive, routing history, audit logs)."""
+    try:
+        results = await run_full_cleanup(db)
+        logger.info(f"Cleanup jobs completed: {results}")
+        return {"status": "success", "results": results}
+    except Exception as e:
+        logger.error(f"Cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+
+@app.post("/paperclip/api/cleanup/archive-tasks")
+async def archive_tasks(
+    days: int = 30,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Archive completed tasks older than specified days."""
+    try:
+        result = await archive_old_tasks(db, days=days)
+        logger.info(f"Task archival completed: {result}")
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.error(f"Task archival failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Task archival failed: {str(e)}")
+
+
+@app.post("/paperclip/api/cleanup/routing-history")
+async def cleanup_routing(
+    days: int = 90,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete routing history older than specified days."""
+    try:
+        result = await cleanup_routing_history(db, days=days)
+        logger.info(f"Routing history cleanup completed: {result}")
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.error(f"Routing history cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Routing cleanup failed: {str(e)}")
+
+
+@app.post("/paperclip/api/cleanup/audit-logs")
+async def cleanup_audit_logs(
+    days: int = 365,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete audit logs older than specified days."""
+    try:
+        result = await cleanup_old_audit_logs(db, days=days)
+        logger.info(f"Audit log cleanup completed: {result}")
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.error(f"Audit log cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Audit cleanup failed: {str(e)}")
+
+
+@app.get("/paperclip/api/cleanup/history")
+async def get_cleanup_history_endpoint(
+    limit: int = 20,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get recent cleanup job history."""
+    try:
+        history = await get_cleanup_history(db, limit=limit)
+        return {"items": history}
+    except Exception as e:
+        logger.error(f"Failed to get cleanup history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cleanup history")
+
+
+@app.get("/paperclip/api/cleanup/archive-stats")
+async def get_archive_stats_endpoint(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get statistics about archived tasks."""
+    try:
+        stats = await get_archive_stats(db)
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get archive stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get archive stats")
+
+
+@app.get("/paperclip/api/cache/stats")
+async def get_cache_stats(
+    current_user: dict = Depends(get_current_user),
+):
+    """Get in-memory cache statistics."""
+    try:
+        stats = get_cache().stats()
+        return {"cache": stats}
+    except Exception as e:
+        logger.error(f"Failed to get cache stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cache stats")
+
+
+@app.post("/paperclip/api/cache/clear")
+async def clear_cache(
+    current_user: dict = Depends(get_current_user),
+):
+    """Clear all in-memory cache entries."""
+    try:
+        get_cache().clear()
+        logger.info("Cache cleared by user")
+        return {"status": "success", "message": "Cache cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear cache: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear cache")
 
 
 # WebSocket endpoint for real-time fleet updates
