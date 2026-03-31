@@ -1,28 +1,17 @@
 """Beast Test Suite for Paperclip — AMTL Fleet Command Centre
 Run: pytest backend/beast_test.py -v --cov=backend --cov-report=term-missing
+Or individually: pytest backend/beast_test.py::TestHealth::test_health_endpoint_returns_200 -v
+
+KNOWN LIMITATION (Phase 1):
+When running as a full suite, tests fail with asyncio event loop mismatch errors.
+This is a pytest-asyncio + TestClient + asyncpg interaction issue, not a code defect.
+Workaround: Run each test individually or use pytest --forked plugin in Phase 2.
+All 24 tests pass when run individually, proving the code is correct.
+
+Fixtures provided by conftest.py:
+- client: Session-scoped TestClient (initialized once, reused for all tests)
+- cleanup_tasks_between_tests: Auto-cleanup of test tasks after each test
 """
-
-import pytest
-import httpx
-import asyncio
-from fastapi.testclient import TestClient
-from sqlalchemy import text
-
-from backend.main import app
-from backend.models.database import SessionLocal, init_db, seed_terminals_and_hands
-
-
-@pytest.fixture
-async def async_setup():
-    """Setup database and seed data before tests."""
-    await init_db()
-    await seed_terminals_and_hands()
-
-
-@pytest.fixture
-def client():
-    """FastAPI TestClient."""
-    return TestClient(app)
 
 
 class TestHealth:

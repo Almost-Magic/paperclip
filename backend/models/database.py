@@ -67,6 +67,8 @@ async def init_db():
         """))
 
         # Tasks table
+        # Note: No FK constraint because assigned_to can reference either terminals or hands
+        # Validation is done at application layer in the route handler
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id VARCHAR(100) PRIMARY KEY,
@@ -76,8 +78,7 @@ async def init_db():
                 status VARCHAR(50) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
-                output TEXT,
-                FOREIGN KEY (assigned_to) REFERENCES terminals(id) ON DELETE SET NULL
+                output TEXT
             )
         """))
 
