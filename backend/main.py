@@ -6,12 +6,13 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 
 from backend.config import PORT, HOST, ENV
 from backend.models.database import init_db, seed_terminals_and_hands, get_session, SessionLocal
 from backend.models.schemas import (
     HealthResponse, TerminalOut, HandOut, TaskCreate, TaskOut, CommandRequest, CommandResponse,
-    LoginRequest, LoginResponse
+    LoginRequest, LoginResponse, TaskReplayRequest
 )
 from backend.services.routing_engine import route_command
 from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
@@ -179,18 +180,63 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_sessio
         raise HTTPException(status_code=500, detail="Failed to create task")
 
 
-# Tasks endpoint — list
-@app.get("/paperclip/api/tasks", response_model=list[TaskOut])
-async def list_tasks(db: AsyncSession = Depends(get_session), current_user: dict = Depends(get_current_user)):
-    """List all tasks with status."""
+# Tasks endpoint — list with filtering and pagination
+@app.get("/paperclip/api/tasks", response_model=dict)
+async def list_tasks(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+    status: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    assigned_to_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List tasks with filtering and pagination."""
     try:
-        result = await db.execute(text("""
+        # Build WHERE clause
+        where_clauses = []
+        params = {}
+
+        if status:
+            where_clauses.append("status = :status")
+            params["status"] = status
+
+        if assigned_to:
+            where_clauses.append("assigned_to = :assigned_to")
+            params["assigned_to"] = assigned_to
+
+        if assigned_to_type:
+            where_clauses.append("assigned_to_type = :assigned_to_type")
+            params["assigned_to_type"] = assigned_to_type
+
+        where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+        # Get total count
+        count_result = await db.execute(text(f"""
+            SELECT COUNT(*) FROM tasks WHERE {where_clause}
+        """), params)
+        total = count_result.scalar() or 0
+
+        # Get paginated results
+        params["limit"] = limit
+        params["offset"] = offset
+
+        result = await db.execute(text(f"""
             SELECT id, assigned_to, assigned_to_type, instruction, status, output, created_at, completed_at
             FROM tasks
+            WHERE {where_clause}
             ORDER BY created_at DESC
-        """))
+            LIMIT :limit OFFSET :offset
+        """), params)
         rows = result.mappings().all()
-        return [dict(row) for row in rows]
+
+        return {
+            "items": [dict(row) for row in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        }
     except Exception as e:
         logger.error(f"Failed to list tasks: {e}")
         raise HTTPException(status_code=500, detail="Failed to list tasks")
@@ -218,9 +264,66 @@ async def get_task(task_id: str, db: AsyncSession = Depends(get_session), curren
         raise HTTPException(status_code=500, detail="Failed to get task")
 
 
+# Tasks endpoint — replay
+@app.post("/paperclip/api/tasks/{task_id}/replay", response_model=TaskOut, status_code=201)
+async def replay_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Replay a previous task — creates a new task with same instruction."""
+    try:
+        # Get original task
+        result = await db.execute(text("""
+            SELECT assigned_to, assigned_to_type, instruction
+            FROM tasks WHERE id = :id
+        """), {"id": task_id})
+        row = result.mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Original task not found")
+
+        # Create new task with same instruction
+        new_task_id = f"task_{uuid.uuid4().hex[:8]}"
+        created_at = datetime.utcnow()
+
+        await db.execute(text("""
+            INSERT INTO tasks (id, assigned_to, assigned_to_type, instruction, status, created_at)
+            VALUES (:id, :assigned_to, :assigned_to_type, :instruction, 'pending', :created_at)
+        """), {
+            "id": new_task_id,
+            "assigned_to": row.assigned_to,
+            "assigned_to_type": row.assigned_to_type,
+            "instruction": row.instruction,
+            "created_at": created_at,
+        })
+        await db.commit()
+
+        logger.info(f"Task {task_id} replayed as {new_task_id}: {row.instruction}")
+
+        return TaskOut(
+            id=new_task_id,
+            assigned_to=row.assigned_to,
+            assigned_to_type=row.assigned_to_type,
+            instruction=row.instruction,
+            status="pending",
+            created_at=created_at,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to replay task: {e}")
+        raise HTTPException(status_code=500, detail="Failed to replay task")
+
+
 # Command endpoint — high-level routing
 @app.post("/paperclip/api/command", response_model=CommandResponse)
-async def handle_command(payload: CommandRequest, db: AsyncSession = Depends(get_session)):
+async def handle_command(
+    payload: CommandRequest,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
     """High-level command — route to right terminal/hand and create task."""
     try:
         # Route the command

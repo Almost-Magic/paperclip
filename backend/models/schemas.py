@@ -117,3 +117,26 @@ class TokenPayload(BaseModel):
     role: str
     permissions: list[str]
     exp: datetime
+
+
+class TaskFilterRequest(BaseModel):
+    """Task filtering and pagination request."""
+    status: Optional[str] = None  # pending, busy, complete, offline
+    assigned_to: Optional[str] = None  # T1, H11, etc.
+    assigned_to_type: Optional[str] = None  # terminal or hand
+    limit: int = Field(default=50, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+class PaginatedTasksResponse(BaseModel):
+    """Paginated task list response."""
+    items: list[TaskOut]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class TaskReplayRequest(BaseModel):
+    """Request to replay/re-run a previous task."""
+    task_id: str = Field(..., description="Original task ID to replay")
