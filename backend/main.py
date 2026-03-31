@@ -8,27 +8,27 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
-from backend.config import PORT, HOST, ENV
-from backend.models.database import init_db, seed_terminals_and_hands, get_session, SessionLocal
-from backend.models.schemas import (
+from config import PORT, HOST, ENV
+from models.database import init_db, seed_terminals_and_hands, get_session, SessionLocal
+from models.schemas import (
     HealthResponse, TerminalOut, HandOut, TaskCreate, TaskOut, CommandRequest, CommandResponse,
     LoginRequest, LoginResponse, TaskReplayRequest
 )
-from backend.services.routing_engine import route_command
-from backend.services.advanced_routing import route_command_advanced, save_user_preference, get_routing_frequency, record_routing_decision
-from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
-from backend.services.websocket import manager
-from backend.services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
-from backend.services.cost_tracking import record_task_cost, get_cost_summary, get_cost_by_agent, get_cost_trend
-from backend.services.audit_logging import log_audit_event, get_audit_log, get_audit_summary
-from backend.services.reporting import get_cost_forecast, get_cost_optimization_tips, get_cost_breakdown_detailed, get_budget_analysis
-from backend.services.caching import (
+from services.routing_engine import route_command
+from services.advanced_routing import route_command_advanced, save_user_preference, get_routing_frequency, record_routing_decision
+from services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
+from services.websocket import manager
+from services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
+from services.cost_tracking import record_task_cost, get_cost_summary, get_cost_by_agent, get_cost_trend
+from services.audit_logging import log_audit_event, get_audit_log, get_audit_summary
+from services.reporting import get_cost_forecast, get_cost_optimization_tips, get_cost_breakdown_detailed, get_budget_analysis
+from services.caching import (
     cache_terminals_list, get_cached_terminals_list, invalidate_terminals_cache,
     cache_hands_list, get_cached_hands_list, invalidate_hands_cache,
     cache_fleet_health, get_cached_fleet_health, invalidate_fleet_health_cache,
     cache_cost_summary, get_cached_cost_summary, invalidate_cost_cache, get_cache
 )
-from backend.services.cleanup import archive_old_tasks, cleanup_routing_history, cleanup_old_audit_logs, run_full_cleanup, get_cleanup_history, get_archive_stats
+from services.cleanup import archive_old_tasks, cleanup_routing_history, cleanup_old_audit_logs, run_full_cleanup, get_cleanup_history, get_archive_stats
 import uuid
 from datetime import datetime, timedelta
 from collections import defaultdict

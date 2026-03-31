@@ -3,7 +3,7 @@
 import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.services.routing_engine import ROUTING_RULES
+from services.routing_engine import ROUTING_RULES
 from collections import Counter
 
 logger = logging.getLogger("paperclip.advanced_routing")

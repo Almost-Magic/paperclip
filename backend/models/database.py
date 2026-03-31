@@ -6,7 +6,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy import text
 import logging
 
-from backend.config import DATABASE_URL
+from config import DATABASE_URL
 
 logger = logging.getLogger("paperclip.database")
 
