@@ -1,0 +1,65 @@
+frontend/tailwind.config.js
+  800ccf4edec7ecab 1-26
+frontend/index.html
+  800ccf4edec7ecab 1-15
+backend/__init__.py
+  800ccf4edec7ecab 1
+CLAUDE.md
+  800ccf4edec7ecab 1-36,38-198
+.env.example
+  800ccf4edec7ecab 1-17
+frontend/vite.config.js
+  800ccf4edec7ecab 1-21
+.gitignore
+  800ccf4edec7ecab 1-34
+backend/services/__init__.py
+  800ccf4edec7ecab 1
+frontend/src/App.jsx
+  800ccf4edec7ecab 1-418
+frontend/src/main.jsx
+  800ccf4edec7ecab 1-10
+README.md
+  800ccf4edec7ecab 1-278
+frontend/postcss.config.js
+  800ccf4edec7ecab 1-6
+backend/requirements.txt
+  800ccf4edec7ecab 1-10
+backend/services/routing_engine.py
+  800ccf4edec7ecab 1-49
+backend/models/database.py
+  800ccf4edec7ecab 1-160
+backend/models/__init__.py
+  800ccf4edec7ecab 1
+frontend/src/index.css
+  800ccf4edec7ecab 1-37
+backend/config.py
+  800ccf4edec7ecab 1-26
+backend/main.py
+  800ccf4edec7ecab 1-205
+backend/beast_test.py
+  800ccf4edec7ecab 1-303
+frontend/package.json
+  800ccf4edec7ecab 1-22
+backend/models/schemas.py
+  800ccf4edec7ecab 1-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "af5ee0bb69a58fd25b0a7176736deab23701092b",
+  "prompts": {
+    "800ccf4edec7ecab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd6e47c5-3aa1-40e0-aa6e-c644e20ed5ba",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "Mani Padisetti <manipalmostmagic.net.au@@>",
+      "messages": [],
+      "total_additions": 1934,
+      "total_deletions": 19,
+      "accepted_lines": 1933,
+      "overriden_lines": 0
+    }
+  }
+}
