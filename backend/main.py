@@ -21,6 +21,7 @@ from backend.services.websocket import manager
 from backend.services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
 from backend.services.cost_tracking import record_task_cost, get_cost_summary, get_cost_by_agent, get_cost_trend
 from backend.services.audit_logging import log_audit_event, get_audit_log, get_audit_summary
+from backend.services.reporting import get_cost_forecast, get_cost_optimization_tips, get_cost_breakdown_detailed, get_budget_analysis
 from backend.services.caching import (
     cache_terminals_list, get_cached_terminals_list, invalidate_terminals_cache,
     cache_hands_list, get_cached_hands_list, invalidate_hands_cache,
@@ -668,6 +669,73 @@ async def get_cost_trend_endpoint(
     except Exception as e:
         logger.error(f"Failed to get cost trend: {e}")
         raise HTTPException(status_code=500, detail="Failed to get cost trend")
+
+
+# Advanced Reporting Endpoints (Phase 3 F5)
+@app.get("/paperclip/api/reports/forecast")
+async def get_cost_forecast_endpoint(
+    days_ahead: int = 7,
+    historical_days: int = 30,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get cost forecast using trend analysis."""
+    try:
+        forecast = await get_cost_forecast(db, days_ahead, historical_days)
+        return forecast
+    except Exception as e:
+        logger.error(f"Failed to get cost forecast: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cost forecast")
+
+
+@app.get("/paperclip/api/reports/optimization")
+async def get_optimization_tips_endpoint(
+    hours: int = 24,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get cost optimization recommendations."""
+    try:
+        tips = await get_cost_optimization_tips(db, hours)
+        return tips
+    except Exception as e:
+        logger.error(f"Failed to get optimization tips: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get optimization tips")
+
+
+@app.get("/paperclip/api/reports/breakdown")
+async def get_breakdown_endpoint(
+    hours: int = 24,
+    group_by: str = "agent",
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get detailed cost breakdown by agent, model, or provider."""
+    try:
+        if group_by not in ["agent", "model", "provider"]:
+            raise HTTPException(status_code=400, detail="Invalid group_by parameter")
+        breakdown = await get_cost_breakdown_detailed(db, hours, group_by)
+        return breakdown
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get cost breakdown: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cost breakdown")
+
+
+@app.get("/paperclip/api/reports/budget")
+async def get_budget_endpoint(
+    budget_aud: float = 1000.0,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Analyze spending against monthly budget."""
+    try:
+        analysis = await get_budget_analysis(db, budget_aud)
+        return analysis
+    except Exception as e:
+        logger.error(f"Failed to get budget analysis: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get budget analysis")
 
 
 # Audit Logging Endpoints (Phase 3 F2)
