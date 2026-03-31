@@ -15,6 +15,7 @@ from backend.models.schemas import (
     LoginRequest, LoginResponse, TaskReplayRequest
 )
 from backend.services.routing_engine import route_command
+from backend.services.advanced_routing import route_command_advanced, save_user_preference, get_routing_frequency, record_routing_decision
 from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
 from backend.services.websocket import manager
 import uuid
@@ -327,17 +328,32 @@ async def replay_task(
         raise HTTPException(status_code=500, detail="Failed to replay task")
 
 
-# Command endpoint — high-level routing
+# Command endpoint — high-level routing (uses advanced routing with learning)
 @app.post("/paperclip/api/command", response_model=CommandResponse)
 async def handle_command(
     payload: CommandRequest,
     db: AsyncSession = Depends(get_session),
     current_user: dict = Depends(get_current_user),
 ):
-    """High-level command — route to right terminal/hand and create task."""
+    """High-level command — route to right terminal/hand and create task using advanced routing."""
     try:
-        # Route the command
-        agent_id, agent_type = route_command(payload.instruction)
+        # Use advanced routing (with learning, preferences, fallback)
+        agent_id, agent_type, reason = await route_command_advanced(
+            instruction=payload.instruction,
+            db=db,
+            username=current_user.get("username"),
+        )
+
+        # Record routing decision for learning
+        await record_routing_decision(
+            db=db,
+            username=current_user.get("username"),
+            instruction=payload.instruction,
+            keyword_matched=reason.split(":")[1] if ":" in reason else "",
+            routed_to=agent_id,
+            routed_to_type=agent_type,
+            reason=reason,
+        )
 
         # Create a task for the routed agent
         task_id = f"task_{uuid.uuid4().hex[:8]}"
@@ -355,7 +371,7 @@ async def handle_command(
         })
         await db.commit()
 
-        logger.info(f"Command routed: '{payload.instruction}' → {agent_id}")
+        logger.info(f"Command routed: '{payload.instruction}' → {agent_id} ({reason})")
 
         # Broadcast task creation to all connected WebSocket clients
         await manager.broadcast_task_created(
@@ -370,12 +386,58 @@ async def handle_command(
             routed_to=agent_id,
             routed_to_type=agent_type,
             task_id=task_id,
-            message=f"Routed to {agent_id}",
+            message=f"Routed to {agent_id} ({reason})",
         )
     except Exception as e:
         await db.rollback()
         logger.error(f"Failed to handle command: {e}")
         raise HTTPException(status_code=500, detail="Failed to handle command")
+
+
+# User preferences endpoint — set preferred routing
+@app.post("/paperclip/api/preferences")
+async def set_user_preference(
+    preferred_terminal: Optional[str] = None,
+    preferred_hand: Optional[str] = None,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Set user routing preferences (preferred terminal or hand)."""
+    try:
+        await save_user_preference(
+            db=db,
+            username=current_user.get("username"),
+            preferred_terminal=preferred_terminal,
+            preferred_hand=preferred_hand,
+        )
+        logger.info(f"User {current_user.get('username')} preferences updated")
+        return {
+            "status": "success",
+            "preferred_terminal": preferred_terminal,
+            "preferred_hand": preferred_hand,
+        }
+    except Exception as e:
+        logger.error(f"Failed to set user preference: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set preference")
+
+
+# Routing frequency endpoint — show most common routes for user
+@app.get("/paperclip/api/routing-stats")
+async def get_routing_stats(
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get routing frequency statistics (learning insights)."""
+    try:
+        freq = await get_routing_frequency(db, current_user.get("username"))
+        return {
+            "username": current_user.get("username"),
+            "routing_frequency": freq,
+            "most_used": list(freq.keys())[0] if freq else None,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get routing stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get routing stats")
 
 
 # WebSocket endpoint for real-time fleet updates

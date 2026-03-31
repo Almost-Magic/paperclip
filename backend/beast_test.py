@@ -288,6 +288,77 @@ class TestIntegration:
             assert tid in existing_ids
 
 
+class TestAdvancedRouting:
+    """Advanced routing with learning, preferences, and fallback chain tests."""
+
+    def test_command_returns_routing_reason(self, client):
+        """Command endpoint returns routing reason (default, frequency, pref, etc)."""
+        payload = {"instruction": "fix CK-MANI"}
+        r = client.post("/paperclip/api/command", json=payload)
+        assert r.status_code == 200
+        data = r.json()
+        assert "message" in data
+        # Message should include routing reason
+        assert "Routed to" in data["message"]
+
+    def test_set_user_preference_terminal(self, client):
+        """User can set preferred terminal for routing."""
+        r = client.post(
+            "/paperclip/api/preferences",
+            params={"preferred_terminal": "T4"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["preferred_terminal"] == "T4"
+
+    def test_set_user_preference_hand(self, client):
+        """User can set preferred hand for routing."""
+        r = client.post(
+            "/paperclip/api/preferences",
+            params={"preferred_hand": "H3"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["preferred_hand"] == "H3"
+
+    def test_routing_stats_endpoint(self, client):
+        """Routing stats endpoint returns frequency insights."""
+        # Create a few commands to generate history
+        for i in range(3):
+            client.post("/paperclip/api/command", json={"instruction": "fix test"})
+
+        # Get stats
+        r = client.get("/paperclip/api/routing-stats")
+        assert r.status_code == 200
+        data = r.json()
+        assert "username" in data
+        assert "routing_frequency" in data
+        # May be empty on first run, that's OK
+
+    def test_multiple_commands_create_routing_history(self, client):
+        """Multiple commands with same instruction build frequency."""
+        for _ in range(2):
+            r = client.post("/paperclip/api/command", json={"instruction": "test app"})
+            assert r.status_code == 200
+            # Should route to H11 (test keyword)
+            assert r.json()["routed_to"] == "H11"
+
+    def test_keyword_matching_still_works(self, client):
+        """Basic keyword matching still functions in advanced routing."""
+        commands = [
+            ("write prd for feature", "T4"),  # write prd → T4
+            ("audit security", "H3"),  # audit → H3
+            ("backup data", "H7"),  # backup → H7
+        ]
+
+        for instruction, expected_agent in commands:
+            r = client.post("/paperclip/api/command", json={"instruction": instruction})
+            assert r.status_code == 200
+            assert r.json()["routed_to"] == expected_agent
+
+
 class TestWebSocket:
     """WebSocket real-time updates tests."""
 

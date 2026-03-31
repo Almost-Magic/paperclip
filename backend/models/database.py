@@ -94,6 +94,34 @@ async def init_db():
             )
         """))
 
+        # User preferences table (for saved routing preferences)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255) NOT NULL UNIQUE,
+                preferred_terminal VARCHAR(50),
+                preferred_hand VARCHAR(50),
+                custom_routes TEXT,
+                fallback_chain TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
+        # Routing history table (for learning from past decisions)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS routing_history (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255),
+                instruction TEXT NOT NULL,
+                keyword_matched VARCHAR(100),
+                routed_to VARCHAR(50) NOT NULL,
+                routed_to_type VARCHAR(20) NOT NULL,
+                reason VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
         # Create indexes
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to)
@@ -106,6 +134,12 @@ async def init_db():
         """))
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_hands_status ON hands(status)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_routing_history_username ON routing_history(username)
+        """))
+        await conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_routing_history_created ON routing_history(created_at)
         """))
 
     logger.info("Database tables initialized")
