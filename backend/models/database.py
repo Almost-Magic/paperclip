@@ -122,6 +122,36 @@ async def init_db():
             )
         """))
 
+        # Cost ledger table (Phase 3 F1 — cost tracking)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS cost_ledger (
+                id SERIAL PRIMARY KEY,
+                task_id VARCHAR(100) NOT NULL UNIQUE,
+                agent_id VARCHAR(50) NOT NULL,
+                model VARCHAR(100),
+                provider VARCHAR(50),
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cost_cents INTEGER DEFAULT 0,
+                currency VARCHAR(3) DEFAULT 'AUD',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
+        # Audit log table (Phase 3 F2 — audit logging)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255),
+                action VARCHAR(100) NOT NULL,
+                resource_type VARCHAR(50),
+                resource_id VARCHAR(100),
+                details JSONB,
+                ip_address VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
         # Create indexes
         await conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to)

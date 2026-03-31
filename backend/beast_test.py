@@ -288,6 +288,90 @@ class TestIntegration:
             assert tid in existing_ids
 
 
+class TestCostTracking:
+    """Cost tracking endpoints tests (Phase 3 F1)."""
+
+    def test_record_task_cost(self, client):
+        """Cost endpoint records task costs."""
+        r = client.post("/paperclip/api/costs/record", params={
+            "task_id": "task_test_001",
+            "agent_id": "T1",
+            "model": "claude-haiku",
+            "input_tokens": 1000,
+            "output_tokens": 500,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["task_id"] == "task_test_001"
+        assert "cost_aud" in data
+        assert data["cost_aud"] > 0
+
+    def test_get_cost_summary(self, client):
+        """Cost summary endpoint returns aggregated costs."""
+        # Record some costs
+        for i in range(3):
+            client.post("/paperclip/api/costs/record", params={
+                "task_id": f"task_cost_{i}",
+                "agent_id": "T1",
+                "model": "claude-haiku",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+            })
+
+        # Get summary
+        r = client.get("/paperclip/api/costs/summary?hours=24")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total_cost_aud" in data
+        assert "task_count" in data
+
+    def test_get_cost_by_agent(self, client):
+        """Agent cost breakdown endpoint returns per-agent stats."""
+        r = client.get("/paperclip/api/costs/by-agent?hours=24")
+        assert r.status_code == 200
+        data = r.json()
+        assert "agents" in data
+        assert "period_hours" in data
+
+    def test_get_cost_trend(self, client):
+        """Cost trend endpoint returns daily breakdown."""
+        r = client.get("/paperclip/api/costs/trend?days=7")
+        assert r.status_code == 200
+        data = r.json()
+        assert "daily_data" in data
+        assert "total_cost_aud" in data
+        assert data["period_days"] == 7
+
+
+class TestAuditLogging:
+    """Audit logging endpoints tests (Phase 3 F2)."""
+
+    def test_get_audit_log(self, client):
+        """Audit log endpoint returns filtered events."""
+        r = client.get("/paperclip/api/audit-log?hours=24&limit=50")
+        assert r.status_code == 200
+        data = r.json()
+        assert "entries" in data
+        assert "total" in data
+        assert "has_more" in data
+
+    def test_get_audit_log_by_action(self, client):
+        """Audit log can be filtered by action."""
+        r = client.get("/paperclip/api/audit-log?action=task_created&hours=24")
+        assert r.status_code == 200
+        data = r.json()
+        assert "entries" in data
+
+    def test_get_audit_summary(self, client):
+        """Audit summary endpoint returns event breakdown."""
+        r = client.get("/paperclip/api/audit-summary?hours=24")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total_events" in data
+        assert "unique_users" in data
+        assert "action_breakdown" in data
+
+
 class TestAdvancedRouting:
     """Advanced routing with learning, preferences, and fallback chain tests."""
 

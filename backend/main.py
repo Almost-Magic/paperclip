@@ -19,6 +19,8 @@ from backend.services.advanced_routing import route_command_advanced, save_user_
 from backend.services.auth import authenticate_user, create_access_token, verify_token, get_token_from_header
 from backend.services.websocket import manager
 from backend.services.monitoring import get_task_metrics, get_terminal_metrics, get_hand_metrics, get_agent_execution_time, get_fleet_health_snapshot
+from backend.services.cost_tracking import record_task_cost, get_cost_summary, get_cost_by_agent, get_cost_trend
+from backend.services.audit_logging import log_audit_event, get_audit_log, get_audit_summary
 import uuid
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -201,6 +203,16 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_sessio
         await db.commit()
 
         logger.info(f"Task {task_id} created: {payload.instruction}")
+
+        # Log audit event
+        await log_audit_event(
+            db=db,
+            username=current_user.get("username"),
+            action="task_created",
+            resource_type="task",
+            resource_id=task_id,
+            details={"instruction": payload.instruction, "assigned_to": payload.assigned_to},
+        )
 
         # Broadcast to all connected WebSocket clients
         await manager.broadcast_task_created(
@@ -544,6 +556,108 @@ async def get_fleet_health(
     except Exception as e:
         logger.error(f"Failed to get fleet health: {e}")
         raise HTTPException(status_code=500, detail="Failed to get fleet health")
+
+
+# Cost Tracking Endpoints (Phase 3 F1)
+@app.post("/paperclip/api/costs/record")
+async def record_cost(
+    task_id: str,
+    agent_id: str,
+    model: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Record cost for a task."""
+    try:
+        result = await record_task_cost(db, task_id, agent_id, model, input_tokens, output_tokens)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to record cost: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record cost")
+
+
+@app.get("/paperclip/api/costs/summary")
+async def get_cost_summary_endpoint(
+    agent_id: Optional[str] = None,
+    hours: int = 24,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get cost summary for period (optionally by agent)."""
+    try:
+        summary = await get_cost_summary(db, agent_id, hours)
+        return summary
+    except Exception as e:
+        logger.error(f"Failed to get cost summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cost summary")
+
+
+@app.get("/paperclip/api/costs/by-agent")
+async def get_agent_costs(
+    hours: int = 24,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get cost breakdown by agent."""
+    try:
+        data = await get_cost_by_agent(db, hours)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to get agent costs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get agent costs")
+
+
+@app.get("/paperclip/api/costs/trend")
+async def get_cost_trend_endpoint(
+    days: int = 7,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get daily cost trend for last N days."""
+    try:
+        trend = await get_cost_trend(db, days)
+        return trend
+    except Exception as e:
+        logger.error(f"Failed to get cost trend: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cost trend")
+
+
+# Audit Logging Endpoints (Phase 3 F2)
+@app.get("/paperclip/api/audit-log")
+async def get_audit_log_endpoint(
+    username: Optional[str] = None,
+    action: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get filtered audit log entries."""
+    try:
+        log = await get_audit_log(db, username, action, resource_type, hours, limit, offset)
+        return log
+    except Exception as e:
+        logger.error(f"Failed to get audit log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get audit log")
+
+
+@app.get("/paperclip/api/audit-summary")
+async def get_audit_summary_endpoint(
+    hours: int = 24,
+    db: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get summary of audit events."""
+    try:
+        summary = await get_audit_summary(db, hours)
+        return summary
+    except Exception as e:
+        logger.error(f"Failed to get audit summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get audit summary")
 
 
 # WebSocket endpoint for real-time fleet updates
